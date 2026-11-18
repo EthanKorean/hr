@@ -28,17 +28,36 @@ Node.js + TypeScript + React + MariaDB + Redis + MQTT, 전부 Docker. **MSA + �
 
 Linux / macOS(Docker Desktop, OrbStack, Colima) 겸용. 필요한 건 docker, openssl, curl 뿐.
 
-### 비밀번호 (저장되지 않음)
+### 비밀번호 (암호화해 보관)
 
-최초 실행 시 **MariaDB root / MariaDB 서비스 계정 / Admin** 비밀번호를 숨김 입력으로 받는다(8자 이상, 출력 가능한 ASCII, `' " \ $` 백틱 공백 제외).
-입력 로직은 `scripts/lib/secrets.sh`. 비밀번호는 **어떤 파일에도 쓰지 않고** init.sh 프로세스의 환경변수로만 `docker compose` 에 전달한다.
+최초 실행 시 **MariaDB root / MariaDB 서비스 계정 / Admin** 비밀번호를 숨김 입력으로 받는다(8자 이상, 출력 가능한 ASCII, `' " \ $` 백틱 공백 제외). 입력 로직은 `scripts/lib/secrets.sh`.
+**평문으로는 어떤 파일에도 쓰지 않는다.** 기동에 성공하면 입력값을 **DEK(데이터 암호화 키)로 암호화**해 `.secrets.enc` 에 보관하고(`scripts/lib/vault.sh`), 다음 실행부터는 보관한 값을 쓰므로 다시 묻지 않는다.
 `.env` 에는 포트/DB 이름 같은 비밀이 아닌 설정만 있다. `JWT_SECRET`·`INTERNAL_KEY` 는 실행할 때마다 메모리에서 새로 만든다(재실행하면 로그인 토큰 무효).
 
-- **재실행:** DB 볼륨이 이미 있으면 **DB 비밀번호만** 다시 묻는다(root/Admin 은 최초 초기화에만 쓰이므로). 틀리면 기동 전에 거부한다. 모르면 `--reset`(데이터 삭제).
-- **Admin 비밀번호:** 최초 구성 때만 사용된다. 직접 보관할 것. 잊었으면 `--reset`.
-- **비대화형(CI):** `HR_DB_ROOT_PASSWORD`, `HR_DB_PASSWORD`, `HR_ADMIN_PASSWORD` 환경변수로 미리 주면 프롬프트를 건너뛴다.
+| | |
+|---|---|
+| 암호문 | 프로젝트 폴더의 `.secrets.enc` (git 제외). 폴더를 통째로 올리거나 공유해도 암호문만 나간다 |
+| DEK | **저장소 밖** `~/.config/hr/dek.key` (권한 600). 처음 쓸 때 `openssl rand` 로 만든다 |
+| 알고리즘 | OpenSSL AES-256-CBC + PBKDF2(200000회, salt). 평문 첫 줄의 매직 문자열로 복호화가 맞았는지 확인해서 틀린 DEK/손상된 파일은 거부한다 |
+| 저장 시점 | 기동에 성공한 뒤에만(DB 비밀번호는 기동·점검을 통과한 값). 쓰다가 실패해도 기존 암호문이 깨지지 않게 임시 파일에 쓴 뒤 바꿔치기한다 |
+| 저장하지 않는 값 | 환경변수(`HR_*`)로 직접 준 값(CI 러너에 DEK/암호문이 생기지 않게), 재실행에서 입력한 Admin 비밀번호(확인할 수 없으므로. 바꾸려면 `vault.sh set ADMIN_PASSWORD`) |
+
+**한계(감수한 것):** DEK 를 읽을 수 있는 사람은 비밀번호를 읽을 수 있다. DEK 가 노출되면 소용없고, DEK 를 잃으면 암호문을 풀 수 없다(아래 "보관함을 못 풀 때" 참고. DB 비밀번호를 모르면 `--reset`). **로컬 개발용 비밀번호에만** 쓰고 운영 비밀은 넣지 않는다. 컨테이너가 실행되는 동안 값은 컨테이너 환경에 존재한다(`docker inspect` 로 보임).
+
+```bash
+./scripts/vault.sh list                  # 보관된 키 이름 (DB_ROOT_PASSWORD, DB_PASSWORD, ADMIN_PASSWORD)
+./scripts/vault.sh get ADMIN_PASSWORD    # 복호화한 값 출력 (화면·로그에 남기지 말 것)
+./scripts/vault.sh set ADMIN_PASSWORD    # 숨김 입력으로 저장/덮어쓰기 (예전에 init 한 환경에 옮겨 담을 때)
+./scripts/vault.sh delete KEY | path
+./scripts/test-vault.sh                  # 보관함 시험(임시 폴더에서만 동작). /bin/bash 로 실행하면 macOS bash 3.2 호환 확인
+```
+
+- **재실행:** 보관한 비밀번호가 있으면 묻지 않고 쓴다. 새로 입력하려면 `./scripts/init.sh --ask`. DB 볼륨이 이미 있는데 보관된 값이 없으면 **DB 비밀번호만** 묻는다(root/Admin 은 최초 초기화에만 쓰이므로. Admin 은 선택 입력이고 Enter 로 건너뛴다). 보관된 값이 비밀번호 규칙에 안 맞으면 그 값은 쓰지 않고 새로 묻는다. 틀리면 기동 전에 거부한다. 모르면 `--reset`(데이터 삭제).
+- **`--reset`:** 컨테이너, 볼륨(DB 데이터), 보관해 둔 비밀번호를 모두 지우고 처음부터 시작한다(DEK 는 남긴다).
+- **Admin 비밀번호:** 최초 구성 때만 쓰이고, 그때 입력한 값이 보관되므로 `vault.sh get ADMIN_PASSWORD` 로 확인할 수 있다(환경변수로 줬다면 보관되지 않는다). 예전에 설치한 환경에는 `./scripts/vault.sh set ADMIN_PASSWORD` 로 한 번 넣어 준다(`init` 과 같은 규칙으로 검사한다).
+- **보관함을 못 풀 때:** DEK 를 잃었거나 파일이 손상되면 `init` 이 이유를 알리고 새로 입력받는다. 다시 보관하려면 `.secrets.enc` 를 지운다.
+- **비대화형(CI):** `HR_DB_ROOT_PASSWORD`, `HR_DB_PASSWORD`, `HR_ADMIN_PASSWORD` 환경변수로 미리 주면 프롬프트를 건너뛴다(보관함보다 우선한다).
 - **이전 버전 `.env`:** 비밀 항목이 남아 있으면 init 이 자동으로 제거한다.
-- 주의: 컨테이너가 실행되는 동안 값은 컨테이너 환경에 존재한다(`docker inspect` 로 보임). 프로젝트 파일/쉘 히스토리에는 남지 않는다.
 
 > rootless podman 환경에서 docker 소켓 권한/BuildKit 오류가 나면:
 > `DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 ./scripts/init.sh`
@@ -133,7 +152,16 @@ python3 tools/seed/seed_tenants.py --clean      # [TEST] 고객사만 삭제 (�
 ```
 
 접속 정보는 루트 `.env` (GATEWAY_PORT, ADMIN_EMAIL)에서 읽고, `--base-url/--email/--password` 로 덮어쓸 수 있다.
-Admin 비밀번호는 저장되지 않으므로 `--password` 나 `ADMIN_PASSWORD` 환경변수로 주거나, 없으면 숨김 프롬프트로 입력받는다.
+Admin 비밀번호는 `--password` 나 `ADMIN_PASSWORD` 환경변수로 주거나(보관함이 있으면 `ADMIN_PASSWORD=$(./scripts/vault.sh get ADMIN_PASSWORD) python3 tools/seed/seed_tenants.py`), 없으면 숨김 프롬프트로 입력받는다.
+
+## 단위 테스트
+
+도메인 규칙(상태 우선순위, 말일 보정 연장, 사업자번호 정규화 등)은 DB 없이 테스트한다. Node 내장 테스트 러너 + `tsx` 라 의존성은 추가로 필요 없다.
+
+```bash
+cd services/tenant && npm install    # 최초 1회(컨테이너 밖에서 실행할 때)
+npm test                             # src/domain/*.test.ts
+```
 
 ## E2E (Playwright)
 
@@ -145,3 +173,5 @@ set -a; . ../.env; set +a           # 포트/ADMIN_EMAIL 등 비밀 아닌 설�
 read -rs -p 'Admin 비밀번호: ' ADMIN_PASSWORD; export ADMIN_PASSWORD; echo
 npx playwright test
 ```
+
+보관함에 Admin 비밀번호가 있으면(init 이 보관한다) 위 과정을 한 번에: `./scripts/e2e.sh` (인자는 `playwright test` 에 그대로 전달, 예 `./scripts/e2e.sh -g 등록`). 보관된 값이 없으면 숨김 입력으로 받는다.

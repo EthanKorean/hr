@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # 비밀번호/시크릿 입력 모듈 (scripts/init.sh 가 source 한다).
 #
-# 원칙: 비밀번호는 어떤 파일에도 저장하지 않는다. 숨김 입력(read -s)으로 받아 이 프로세스의
-# 환경변수로만 보관하고, `docker compose` 에 환경으로 전달한다. (.env 에는 포트/DB 이름 같은 비밀 아닌 설정만 둔다)
+# 원칙: 비밀번호는 평문으로 어떤 파일에도 저장하지 않는다. 숨김 입력(read -s)으로 받아 이 프로세스의
+# 환경변수로 보관하고, `docker compose` 에 환경으로 전달한다. (.env 에는 포트/DB 이름 같은 비밀 아닌 설정만 둔다)
+# 기동에 성공한 입력값은 scripts/lib/vault.sh 가 DEK 로 암호화해 .secrets.enc 에 보관한다(저장소 밖 DEK).
 # 비대화형(CI)에서는 HR_<이름> 환경변수(예: HR_DB_PASSWORD)가 있으면 프롬프트 없이 그 값을 쓴다.
 # macOS 기본 bash 3.2 호환.
 

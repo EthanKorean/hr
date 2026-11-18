@@ -59,6 +59,20 @@ Linux / macOS(Docker Desktop, OrbStack, Colima) 겸용. 필요한 건 docker, op
 - **비대화형(CI):** `HR_DB_ROOT_PASSWORD`, `HR_DB_PASSWORD`, `HR_ADMIN_PASSWORD` 환경변수로 미리 주면 프롬프트를 건너뛴다(보관함보다 우선한다).
 - **이전 버전 `.env`:** 비밀 항목이 남아 있으면 init 이 자동으로 제거한다.
 
+#### ⚠️ 이전 버전을 받아 쓰던 경우: `git pull` 후 초기화를 한 번 다시 실행하세요
+
+이전 버전은 입력한 비밀번호를 어디에도 저장하지 않았습니다. 이 버전부터는 암호화해 보관합니다. 이전 버전으로 설치해 둔 컴퓨터에서 `git pull` 했다면 **초기화(`init.sh`)를 한 번 다시** 실행하세요.
+
+```bash
+git pull
+./scripts/init.sh                        # DB 비밀번호를 한 번 입력(Admin 질문은 Enter 로 건너뜀) → 기동에 성공하면 암호화해 보관(이후 묻지 않음)
+./scripts/vault.sh set ADMIN_PASSWORD    # Admin 비밀번호도 보관하려면 한 번 입력 (화면 테스트 ./scripts/e2e.sh 가 읽는다)
+```
+
+- **DB 데이터는 그대로입니다**(`--reset` 불필요). `init` 은 이미 있는 DB 볼륨을 보고 DB 비밀번호만 묻고(Admin 은 선택 입력), 기존 비밀번호를 바꾸지 않습니다. DB/Redis/MQTT 컨테이너는 재생성하지 않지만 서비스 컨테이너는 다시 빌드·기동되므로 로그인 토큰은 무효가 됩니다.
+- 재실행에서 입력한 Admin 비밀번호는 맞는지 확인할 수 없어서 보관하지 않습니다. 그래서 위처럼 `vault.sh set` 으로 따로 넣습니다(`init` 과 같은 규칙으로 검사합니다).
+- **안 해도 동작은 합니다**(예전처럼 `init` 때마다 DB 비밀번호를 입력). 다만 비밀번호가 보관되지 않아, `e2e.sh` 도 실행할 때마다 Admin 비밀번호를 입력해야 합니다.
+
 > rootless podman 환경에서 docker 소켓 권한/BuildKit 오류가 나면:
 > `DOCKER_HOST=unix:///run/user/$UID/podman/podman.sock COMPOSE_DOCKER_CLI_BUILD=0 DOCKER_BUILDKIT=0 ./scripts/init.sh`
 

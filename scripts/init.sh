@@ -138,6 +138,10 @@ if [ "$HAS_VOLUME" = 0 ]; then
   warn "입력한 비밀번호는 기동에 성공하면 DEK 로 암호화해 .secrets.enc 에 보관합니다. 그래도 직접 기억해 두세요. (DEK: ${DEK_FILE})"
 else
   log "기존 DB 볼륨(${DB_VOLUME}) 감지: 최초 구성 때 입력한 DB 비밀번호가 필요합니다."
+  # 환경변수(HR_DB_PASSWORD)로 준 값은 보관하지 않으므로 그 경우엔 안내하지 않는다(거짓 안내가 된다).
+  if [ ! -f "$VAULT_FILE" ] && [ -z "${HR_DB_PASSWORD:-}" ]; then
+    log "이전 버전에서 업데이트하셨다면: 입력하는 DB 비밀번호는 기동에 성공하면 암호화해 보관되어 다음부터 묻지 않습니다. Admin 비밀번호는 Enter 로 건너뛰고, 보관하려면 끝난 뒤 ./scripts/vault.sh set ADMIN_PASSWORD"
+  fi
   # root/Admin 비밀번호는 최초 초기화 때만 쓰이므로 재실행에서는 묻지 않는다.
   export DB_ROOT_PASSWORD="unused-existing-volume"
   prompt_secret DB_PASSWORD "MariaDB 서비스 계정(${DB_USER}_*) 비밀번호" 0
@@ -201,6 +205,13 @@ fi
 
 # 보관함에 Admin 비밀번호가 실제로 있을 때만 확인 방법을 안내한다(환경변수로 줬거나 기존 볼륨 재실행이면 없다).
 ADMIN_NOTE="(init 중 입력한 비밀번호. 보관되지 않았음)"
+# 기존 DB 볼륨 재실행에서 Enter 로 건너뛰었으면 이번에 입력한 값이 없다(최초 구성 때의 비밀번호가 그대로다).
+if [ -z "${ADMIN_PASSWORD:-}" ]; then
+  ADMIN_NOTE="(최초 구성 때 입력한 비밀번호. 이번엔 입력하지 않았음)"
+elif [ "$HAS_VOLUME" = 1 ]; then
+  # 재실행에서 입력한 값은 admin 이 아직 없을 때만 쓰인다. 이미 있으면 최초 구성 때 비밀번호가 그대로라 입력값으로 로그인하면 실패(5회 잠김)한다.
+  ADMIN_NOTE="(admin 이 이미 있었다면 최초 구성 때 비밀번호, 없어서 새로 만들었다면 방금 입력한 비밀번호. 보관되지 않았음)"
+fi
 case " $(vault_keys 2>/dev/null | tr '\n' ' ') " in
   *" ADMIN_PASSWORD "*) ADMIN_NOTE="(보관된 값 확인: ./scripts/vault.sh get ADMIN_PASSWORD)" ;;
 esac

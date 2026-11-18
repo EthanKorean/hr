@@ -1,0 +1,130 @@
+services:
+  db:
+    image: mariadb:11
+    restart: unless-stopped
+    environment:
+      # MARIADB_USER/PASSWORD 는 쓰지 않는다(서비스별 계정은 아래 01-databases.sh 가 만든다 -> 미사용 공용 계정이 생기지 않음)
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      MARIADB_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      AUTH_DB_NAME: ${AUTH_DB_NAME}
+      TENANT_DB_NAME: ${TENANT_DB_NAME}
+      TZ: Asia/Seoul
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "127.0.0.1:${DB_PORT}:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./docker/mariadb/01-databases.sh:/docker-entrypoint-initdb.d/01-databases.sh:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "127.0.0.1:${REDIS_PORT}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MQTT_PORT}:1883"
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mqtt_data:/mosquitto/data
+
+  # ---- 내부 서비스: 호스트에 포트를 열지 않는다 (gateway 만 외부 노출) ----
+  auth-service:
+    build: ./services/auth
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PORT: 3001
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${AUTH_DB_NAME}
+      DB_USER: ${DB_USER}_auth
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      INTERNAL_KEY: ${INTERNAL_KEY}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-1}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      TZ: Asia/Seoul
+    volumes:
+      - ./services/auth/src:/app/src
+      - ./services/auth/migrations:/app/migrations
+
+  tenant-service:
+    build: ./services/tenant
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      mqtt:
+        condition: service_started
+    environment:
+      PORT: 3002
+      DB_HOST: db
+      DB_PORT: 3306
+      DB_NAME: ${TENANT_DB_NAME}
+      DB_USER: ${DB_USER}_tenant
+      DB_PASSWORD: ${DB_PASSWORD}
+      MQTT_URL: mqtt://mqtt:1883
+      INTERNAL_KEY: ${INTERNAL_KEY}
+      TZ: Asia/Seoul
+    volumes:
+      - ./services/tenant/src:/app/src
+      - ./services/tenant/migrations:/app/migrations
+
+  gateway:
+    build: ./services/gateway
+    restart: unless-stopped
+    depends_on:
+      - auth-service
+      - tenant-service
+    environment:
+      PORT: 3000
+      AUTH_URL: http://auth-service:3001
+      TENANT_URL: http://tenant-service:3002
+      INTERNAL_KEY: ${INTERNAL_KEY}
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT}:3000"
+    volumes:
+      - ./services/gateway/src:/app/src
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - gateway
+    environment:
+      API_TARGET: http://gateway:3000
+      CHOKIDAR_USEPOLLING: ${CHOKIDAR_USEPOLLING:-false} # macOS/Windows 바인드 마운트 HMR 안정화(init.sh 가 macOS 에서 true 기록)
+    ports:
+      - "127.0.0.1:${FRONTEND_PORT}:5173"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
+
+volumes:
+  db_data:
+  redis_data:
+  mqtt_data:
